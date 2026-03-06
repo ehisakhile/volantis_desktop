@@ -1,0 +1,109 @@
+@import "tailwindcss";
+
+/* Custom color palette based on the web app */
+@theme {
+  /* Navy color palette */
+  --color-navy-50: #f0f5ff;
+  --color-navy-100: #e0ebff;
+  --color-navy-200: #c7d9ff;
+  --color-navy-300: #a3bcff;
+  --color-navy-400: #7d96ff;
+  --color-navy-500: #5d76ff;
+  --color-navy-600: #3d5afe;
+  --color-navy-700: #3048c9;
+  --color-navy-800: #25389f;
+  --color-navy-900: #1e2b75;
+  --color-navy-950: #131a4a;
+  
+  /* Sky accent color */
+  --color-sky-50: #f0f9ff;
+  --color-sky-100: #e0f2fe;
+  --color-sky-200: #bae6fd;
+  --color-sky-300: #7dd3fc;
+  --color-sky-400: #38bdf8;
+  --color-sky-500: #0ea5e9;
+  --color-sky-600: #0284c7;
+  --color-sky-700: #0369a1;
+  --color-sky-800: #075985;
+  --color-sky-900: #0c4a6e;
+  
+  /* Custom green accent */
+  --color-accent-50: #f0fdf9;
+  --color-accent-100: #ccfbef;
+  --color-accent-200: #99f6db;
+  --color-accent-300: #5eeaab;
+  --color-accent-400: #2dd4a8;
+  --color-accent-500: #14b894;
+  --color-accent-600: #0d966e;
+  --color-accent-700: #0f7558;
+  --color-accent-800: #115e48;
+  --color-accent-900: #134e3a;
+}
+
+/* Base styles */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1e2b75;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #5d76ff;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #7d96ff;
+}
+
+/* Animations */
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(0, 229, 160, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(0, 229, 160, 0);
+  }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s infinite;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out;
+}
