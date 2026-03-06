@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { logger } from '../lib/logger';
 
+export type AppMode = 'stream' | 'record' | 'stream_and_record';
+
 export interface StreamData {
   id: string;
   slug: string;
@@ -14,6 +16,9 @@ export interface StreamData {
 }
 
 interface StreamState {
+  // App mode (stream only, record only, or both)
+  appMode: AppMode;
+  
   // Stream data
   currentStream: StreamData | null;
   
@@ -33,6 +38,12 @@ interface StreamState {
   wantsToRecord: boolean;
   isRecording: boolean;
   recordingBlob: Blob | null;
+  recordingDuration: number;
+  recordedFilename: string | null;
+  isUploading: boolean;
+  uploadProgress: number;
+  autoUpload: boolean;
+  isUploaded: boolean;
   
   // Connection state
   connectionState: 'idle' | 'connecting' | 'connected' | 'failed';
@@ -49,6 +60,7 @@ interface StreamState {
   error: string | null;
   
   // Actions
+  setAppMode: (mode: AppMode) => void;
   setCurrentStream: (stream: StreamData | null) => void;
   setStreamTitle: (title: string) => void;
   setStreamDescription: (description: string) => void;
@@ -61,6 +73,12 @@ interface StreamState {
   setWantsToRecord: (wants: boolean) => void;
   setIsRecording: (recording: boolean) => void;
   setRecordingBlob: (blob: Blob | null) => void;
+  setRecordingDuration: (duration: number) => void;
+  setRecordedFilename: (filename: string | null) => void;
+  setIsUploading: (uploading: boolean) => void;
+  setUploadProgress: (progress: number) => void;
+  setAutoUpload: (auto: boolean) => void;
+  setIsUploaded: (uploaded: boolean) => void;
   setConnectionState: (state: 'idle' | 'connecting' | 'connected' | 'failed') => void;
   setIsStreaming: (streaming: boolean) => void;
   setIsStarting: (starting: boolean) => void;
@@ -74,6 +92,7 @@ interface StreamState {
 
 export const useStreamStore = create<StreamState>((set) => ({
   // Initial state
+  appMode: 'stream',
   currentStream: null,
   streamTitle: '',
   streamDescription: '',
@@ -86,6 +105,12 @@ export const useStreamStore = create<StreamState>((set) => ({
   wantsToRecord: false,
   isRecording: false,
   recordingBlob: null,
+  recordingDuration: 0,
+  recordedFilename: null,
+  isUploading: false,
+  uploadProgress: 0,
+  autoUpload: false,
+  isUploaded: false,
   connectionState: 'idle',
   isStreaming: false,
   isStarting: false,
@@ -96,6 +121,7 @@ export const useStreamStore = create<StreamState>((set) => ({
   error: null,
 
   // Actions
+  setAppMode: (mode) => set({ appMode: mode }),
   setCurrentStream: (stream) => {
     logger.store(`📦 StreamStore: setCurrentStream`, { streamId: stream?.id });
     set({ currentStream: stream });
@@ -125,6 +151,12 @@ export const useStreamStore = create<StreamState>((set) => ({
     set({ isRecording: recording });
   },
   setRecordingBlob: (blob) => set({ recordingBlob: blob }),
+  setRecordingDuration: (duration) => set({ recordingDuration: duration }),
+  setRecordedFilename: (filename) => set({ recordedFilename: filename }),
+  setIsUploading: (uploading) => set({ isUploading: uploading }),
+  setUploadProgress: (progress) => set({ uploadProgress: progress }),
+  setAutoUpload: (auto) => set({ autoUpload: auto }),
+  setIsUploaded: (uploaded) => set({ isUploaded: uploaded }),
   setConnectionState: (state) => {
     logger.webrtc(`🔗 WebRTC: Connection state changed to ${state}`);
     set({ connectionState: state });
@@ -151,6 +183,7 @@ export const useStreamStore = create<StreamState>((set) => ({
   resetStream: () => {
     logger.store('📦 StreamStore: Resetting stream state');
     set({
+      appMode: 'stream',
       currentStream: null,
       streamTitle: '',
       streamDescription: '',
@@ -162,6 +195,12 @@ export const useStreamStore = create<StreamState>((set) => ({
       wantsToRecord: false,
       isRecording: false,
       recordingBlob: null,
+      recordingDuration: 0,
+      recordedFilename: null,
+      isUploading: false,
+      uploadProgress: 0,
+      autoUpload: false,
+      isUploaded: false,
       connectionState: 'idle',
       isStreaming: false,
       isStarting: false,

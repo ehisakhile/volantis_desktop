@@ -4,9 +4,15 @@ import { useAuthStore } from '../store/authStore';
 import { useStreamStore } from '../store/streamStore';
 import { useAudioMixer } from '../hooks/useAudioMixer';
 import {
+  MixerEngine,
+  createMixerEngine,
+  captureMicSource,
+  captureSystemSource,
+} from '../lib/mixer-engine';
+import {
   Mic, Radio, Square, Loader2,
   Monitor, AlertCircle, Wifi, WifiOff, Image,
-  Upload, LogOut, MicOff, ChevronDown, ChevronUp
+  Upload, LogOut, MicOff, ChevronDown, ChevronUp, Play
 } from 'lucide-react';
 
 const API_URL = 'https://api-dev.volantislive.com';
@@ -189,13 +195,8 @@ export function StreamPage() {
   const { user, logout, accessToken } = useAuthStore();
   const store = useStreamStore();
 
-  // Audio mixer for mixing mic and system audio
-  const audioMixer = useAudioMixer({
-    onLevelChange: (level) => {
-      setAudioLevel(level);
-      setAudioLevel2(Math.max(0, level + (Math.random() - 0.5) * 0.08));
-    }
-  });
+  // Mixer Engine for audio mixing
+  const mixerEngineRef = useRef<MixerEngine | null>(null);
 
   const {
     streamTitle, streamDescription, thumbnail, thumbnailPreview, useMic, useSystemAudio,
@@ -207,6 +208,16 @@ export function StreamPage() {
     setCodec, setBitrate, setIceState, setError, resetStream,
   } = store;
 
+  // Audio mixer hook for volume controls
+  const audioMixer = useAudioMixer();
+
+  // Active stream detection
+  const [existingActiveStream, setExistingActiveStream] = useState<{id: string; slug: string; title: string; description?: string; cf_webrtc_publish_url?: string; created_at: string} | null>(null);
+  const [isCheckingActiveStream, setIsCheckingActiveStream] = useState(false);
+  const [showResumePrompt, setShowResumePrompt] = useState(false);
+
+  const hasActiveStream = !!existingActiveStream && !isStreaming;
+
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const pubStreamRef = useRef<MediaStream | null>(null);
@@ -216,12 +227,198 @@ export function StreamPage() {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationRef = useRef<number | null>(null);
 
+  // Start Visualizer - must be defined before callbacks that use it
+  const startVisualizer = useCallback(() => {
+    if (!pubStreamRef.current || !canvasRef.current) return;
+    const audioContext = new AudioContext();
+    audioContextRef.current = audioContext;
+    const source = audioContext.createMediaStreamSource(pubStreamRef.current);
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 512;
+    source.connect(analyser);
+    analyserRef.current = analyser;
+
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d')!;
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+
+    const draw = () => {
+      if (!analyserRef.current || !canvasRef.current) return;
+      animationRef.current = requestAnimationFrame(draw);
+      analyserRef.current.getByteFrequencyData(dataArray);
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const barWidth = (canvas.width / bufferLength) * 2.5;
+      let x = 0;
+      for (let i = 0; i < bufferLength; i++) {
+        const barHeight = (dataArray[i] / 255) * canvas.height;
+        const gradient = ctx.createLinearGradient(0, canvas.height - barHeight, 0, canvas.height);
+        gradient.addColorStop(0, '#22c55e');
+        gradient.addColorStop(0.5, '#eab308');
+        gradient.addColorStop(1, '#22c55e');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+        x += barWidth + 1;
+      }
+    };
+    draw();
+  }, []);
+
+  // Start Stats - must be defined before callbacks that use it
+  const startStats = useCallback(() => {
+    let lastBytes = 0, lastTs = 0;
+    statsTimerRef.current = setInterval(async () => {
+      if (!pcRef.current) return;
+      const stats = await pcRef.current.getStats();
+      stats.forEach(r => {
+        if (r.type === 'outbound-rtp' && r.kind === 'audio') {
+          const now = r.timestamp;
+          const bytes = r.bytesSent;
+          if (lastTs) {
+            const dt = (Number(now) - lastTs) / 1000;
+            const kbps = Math.round(((bytes - lastBytes) * 8) / dt / 1000);
+            setBitrate(kbps + ' kbps');
+          }
+          lastBytes = Number(bytes);
+          lastTs = Number(now);
+        }
+      });
+    }, 1500);
+  }, []);
+
   const [isOnline, setIsOnline] = useState(true);
   const [showMicPicker, setShowMicPicker] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
   const [audioLevel2, setAudioLevel2] = useState(0); // simulated R channel
 
   useEffect(() => { loadMicDevices(); }, []);
+
+  // Check for existing active streams on mount
+  useEffect(() => {
+    checkForActiveStream();
+  }, []);
+
+  // Check for active streams
+  const checkForActiveStream = useCallback(async () => {
+    if (!accessToken) return;
+    
+    setIsCheckingActiveStream(true);
+    try {
+      const response = await fetch(`${API_URL}/livestreams?status=active&limit=10&offset=0`, {
+        headers: { 'Authorization': `Bearer ${accessToken}` },
+      });
+      
+      if (response.ok) {
+        const streams = await response.json();
+        if (streams && streams.length > 0) {
+          const activeStream = streams[0];
+          console.log('Found existing active stream:', activeStream);
+          setExistingActiveStream(activeStream);
+          setStreamTitle(activeStream.title);
+          setStreamDescription(activeStream.description || '');
+          setShowResumePrompt(true);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to check for active streams:', err);
+    } finally {
+      setIsCheckingActiveStream(false);
+    }
+  }, [accessToken, setStreamTitle, setStreamDescription]);
+
+  // Handle resume to existing stream
+  const handleResumeStream = useCallback(async () => {
+    if (!existingActiveStream) return;
+    
+    setShowResumePrompt(false);
+    setIsStarting(true);
+    setError(null);
+    setConnectionState('connecting');
+
+    try {
+      // Create and initialize Mixer Engine
+      const engine = createMixerEngine();
+      mixerEngineRef.current = engine;
+
+      // Capture audio based on user selection
+      if (useMic) {
+        const micStream = await captureMicSource(selectedMicDevice || undefined);
+        engine.addChannel('mic', 'MIC', 'mic', micStream, selectedMicDevice || undefined);
+      }
+      
+      if (useSystemAudio) {
+        const systemStream = await captureSystemSource();
+        engine.addChannel('system', 'SYSTEM', 'system', systemStream);
+      }
+      
+      const outputStream = engine.outputStream;
+      
+      if (!outputStream || outputStream.getAudioTracks().length === 0) {
+        throw new Error('No audio source available');
+      }
+      
+      pubStreamRef.current = outputStream;
+
+      // Start visualizer
+      if (canvasRef.current) {
+        startVisualizer();
+      }
+
+      const pc = new RTCPeerConnection(ICE_CONFIG);
+      pcRef.current = pc;
+
+      pc.oniceconnectionstatechange = () => {
+        const s = pc.iceConnectionState;
+        setIceState(s);
+        if (s === 'connected') { setConnectionState('connected'); startStats(); }
+        else if (s === 'failed' || s === 'disconnected') setConnectionState('failed');
+      };
+
+      outputStream.getAudioTracks().forEach(t => pc.addTrack(t, outputStream));
+      const offer = await pc.createOffer({ offerToReceiveAudio: false, offerToReceiveVideo: false });
+      await pc.setLocalDescription(offer);
+
+      await new Promise<void>((resolve) => {
+        if (pc.iceGatheringState === 'complete') { resolve(); return; }
+        const t = setTimeout(resolve, 2000);
+        pc.onicecandidate = e => { if (!e.candidate) { clearTimeout(t); resolve(); } };
+      });
+
+      const publishUrl = existingActiveStream.cf_webrtc_publish_url;
+      if (!publishUrl) throw new Error('No publish URL available for reconnection');
+      
+      const res = await fetch(publishUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/sdp', Accept: 'application/sdp' },
+        body: pc.localDescription!.sdp,
+      });
+      if (!res.ok) throw new Error(`Server ${res.status}`);
+      const answerSdp = await res.text();
+      await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+      setCodec(answerSdp.includes('opus') ? 'Opus/48k' : 'Unknown');
+
+      durationIntervalRef.current = setInterval(() => setStreamDuration(streamDuration + 1), 1000);
+      setIsStreaming(true);
+      setExistingActiveStream(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to resume stream');
+      setConnectionState('failed');
+      teardownStream();
+    } finally {
+      setIsStarting(false);
+    }
+  }, [existingActiveStream, useMic, useSystemAudio, selectedMicDevice, streamDuration, startVisualizer, startStats, setIceState, setConnectionState, setCodec, setStreamDuration, setIsStreaming, setError]);
+
+  // Handle start new stream (dismiss resume prompt)
+  const handleStartNewStream = useCallback(() => {
+    setShowResumePrompt(false);
+    setExistingActiveStream(null);
+    setStreamTitle('');
+    setStreamDescription('');
+    setThumbnail(null);
+    setThumbnailPreview(null);
+  }, [setStreamTitle, setStreamDescription, setThumbnail, setThumbnailPreview]);
 
   useEffect(() => {
     const on = () => setIsOnline(true);
@@ -249,103 +446,52 @@ export function StreamPage() {
     }
   }, [selectedMicDevice, setMicDevices, setSelectedMicDevice, setError]);
 
-  const startVisualizer = useCallback(() => {
-    if (!pubStreamRef.current || !canvasRef.current) return;
-    const audioContext = new AudioContext();
-    audioContextRef.current = audioContext;
-    const source = audioContext.createMediaStreamSource(pubStreamRef.current);
-    const analyser = audioContext.createAnalyser();
-    analyser.fftSize = 512;
-    source.connect(analyser);
-    analyserRef.current = analyser;
-
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d')!;
-    const bufferLength = analyser.frequencyBinCount;
-    const dataArray = new Uint8Array(bufferLength);
-
-    const draw = () => {
-      if (!isStreaming) return;
-      animationRef.current = requestAnimationFrame(draw);
-      analyser.getByteFrequencyData(dataArray);
-
-      const avg = dataArray.reduce((a, b) => a + b, 0) / bufferLength;
-      const level = avg / 255;
-      setAudioLevel(level);
-      setAudioLevel2(Math.max(0, level + (Math.random() - 0.5) * 0.08));
-
-      // Dark background with subtle grid
-      ctx.fillStyle = '#060a0f';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      // Grid lines
-      ctx.strokeStyle = 'rgba(255,255,255,0.03)';
-      ctx.lineWidth = 1;
-      for (let i = 0; i < canvas.width; i += 40) {
-        ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, canvas.height); ctx.stroke();
-      }
-      for (let i = 0; i < canvas.height; i += 20) {
-        ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(canvas.width, i); ctx.stroke();
-      }
-
-      // Draw spectrum bars
-      const barCount = 80;
-      const barW = (canvas.width / barCount) - 1.5;
-      const step = Math.floor(bufferLength / barCount);
-
-      for (let i = 0; i < barCount; i++) {
-        let sum = 0;
-        for (let j = 0; j < step; j++) sum += dataArray[i * step + j];
-        const val = sum / step / 255;
-        const barH = val * canvas.height * 0.9;
-        const x = i * (barW + 1.5);
-        const pct = i / barCount;
-
-        // Color: green → amber → red at top
-        const r = pct > 0.7 ? 239 : pct > 0.5 ? Math.round(34 + (245 - 34) * ((pct - 0.5) / 0.2)) : 34;
-        const g = pct > 0.85 ? Math.round(197 - (197 * ((pct - 0.85) / 0.15))) : 197;
-        const b = 94;
-
-        // Gradient per bar
-        const grad = ctx.createLinearGradient(0, canvas.height, 0, canvas.height - barH);
-        grad.addColorStop(0, `rgba(${r},${g},${b},0.9)`);
-        grad.addColorStop(1, `rgba(${r},${g},${b},0.4)`);
-
-        ctx.fillStyle = grad;
-        ctx.fillRect(x, canvas.height - barH, barW, barH);
-
-        // Peak cap
-        ctx.fillStyle = `rgba(${r},${g},${b},1)`;
-        ctx.fillRect(x, canvas.height - barH - 2, barW, 2);
-      }
-    };
-    draw();
-  }, [isStreaming]);
-
   const handleStartStream = useCallback(async () => {
     if (!streamTitle.trim()) { setError('Stream title required'); return; }
     if (!accessToken) { navigate('/login'); return; }
+
+    // Check for active stream first
+    if (existingActiveStream) {
+      setShowResumePrompt(true);
+      return;
+    }
+
+    // Validate audio source selection
+    if (!useMic && !useSystemAudio) {
+      setError('Please select at least one audio source (Microphone or System Audio)');
+      return;
+    }
 
     setIsStarting(true);
     setError(null);
     setConnectionState('connecting');
 
     try {
-      // Request audio sources based on user settings
-      if (useMic) {
-        const micSuccess = await audioMixer.requestMicAccess(selectedMicDevice || undefined);
-        if (!micSuccess) {
-          throw new Error('Failed to access microphone');
-        }
-      }
+      // Create and initialize Mixer Engine
+      const engine = createMixerEngine();
+      mixerEngineRef.current = engine;
 
-      if (useSystemAudio) {
-        const systemSuccess = await audioMixer.requestSystemAudio();
-        if (!systemSuccess) {
-          // User may have cancelled - continue without system audio
-          console.warn('System audio not available');
-        }
+      // Capture audio based on user selection and add to mixer
+      let micStream: MediaStream | null = null;
+      
+      if (useMic) {
+        micStream = await captureMicSource(selectedMicDevice || undefined);
+        engine.addChannel('mic', 'MIC', 'mic', micStream, selectedMicDevice || undefined);
       }
+      
+      if (useSystemAudio) {
+        const systemStream = await captureSystemSource();
+        engine.addChannel('system', 'SYSTEM', 'system', systemStream);
+      }
+      
+      // Get the mixed output stream for WebRTC
+      const outputStream = engine.outputStream;
+      
+      if (!outputStream || outputStream.getAudioTracks().length === 0) {
+        throw new Error('No audio source available');
+      }
+      
+      pubStreamRef.current = outputStream;
 
       // Create FormData with stream details and thumbnail
       const formData = new FormData();
@@ -365,12 +511,10 @@ export function StreamPage() {
       const streamData = await response.json();
       if (!streamData.cf_webrtc_publish_url) throw new Error('No publish URL returned');
 
-      // Use mixed stream from audio mixer
-      const mixedStream = audioMixer.state.mixedStream;
-      if (!mixedStream || mixedStream.getAudioTracks().length === 0) {
-        throw new Error('No audio source available');
+      // Start visualizer with the mixed output
+      if (canvasRef.current) {
+        startVisualizer();
       }
-      pubStreamRef.current = mixedStream;
 
       const pc = new RTCPeerConnection(ICE_CONFIG);
       pcRef.current = pc;
@@ -382,7 +526,7 @@ export function StreamPage() {
         else if (s === 'failed' || s === 'disconnected') setConnectionState('failed');
       };
 
-      mixedStream.getAudioTracks().forEach(t => pc.addTrack(t, mixedStream));
+      outputStream.getAudioTracks().forEach(t => pc.addTrack(t, outputStream));
       const offer = await pc.createOffer({ offerToReceiveAudio: false, offerToReceiveVideo: false });
       await pc.setLocalDescription(offer);
 
@@ -411,22 +555,7 @@ export function StreamPage() {
     } finally {
       setIsStarting(false);
     }
-  }, [streamTitle, streamDescription, thumbnail, accessToken, useMic, useSystemAudio, selectedMicDevice, navigate, streamDuration, audioMixer, setStreamDuration, setIceState, setError, setConnectionState, setIsStreaming, setIsStarting, setCodec]);
-
-  const startStats = useCallback(() => {
-    let lastBytes = 0, lastTs = 0;
-    statsTimerRef.current = setInterval(async () => {
-      if (!pcRef.current) return;
-      const stats = await pcRef.current.getStats();
-      stats.forEach(r => {
-        if (r.type === 'outbound-rtp' && r.kind === 'audio') {
-          const now = r.timestamp, bytes = r.bytesSent;
-          if (lastTs) { const dt = (Number(now) - lastTs) / 1000; setBitrate(Math.round(((bytes - lastBytes) * 8) / dt / 1000) + ' kbps'); }
-          lastBytes = Number(bytes); lastTs = Number(now);
-        }
-      });
-    }, 1500);
-  }, [setBitrate]);
+  }, [streamTitle, streamDescription, thumbnail, accessToken, useMic, useSystemAudio, selectedMicDevice, navigate, streamDuration, existingActiveStream, setStreamDuration, setIceState, setError, setConnectionState, setIsStreaming, setIsStarting, setCodec]);
 
   const teardownStream = useCallback(() => {
     pcRef.current?.close(); pcRef.current = null;
@@ -436,9 +565,12 @@ export function StreamPage() {
     if (statsTimerRef.current) clearInterval(statsTimerRef.current);
     if (animationRef.current) cancelAnimationFrame(animationRef.current);
     setAudioLevel(0); setAudioLevel2(0);
-    // Stop audio mixer
-    audioMixer.stopAll();
-  }, [audioMixer]);
+    // Destroy MixerEngine and release all audio resources
+    if (mixerEngineRef.current) {
+      mixerEngineRef.current.destroy();
+      mixerEngineRef.current = null;
+    }
+  }, []);
 
   const handleStopStream = useCallback(() => {
     teardownStream();
@@ -475,6 +607,54 @@ export function StreamPage() {
       userSelect: 'none',
       overflow: 'hidden',
     }}>
+      {/* Resume Stream Prompt Modal */}
+      {showResumePrompt && existingActiveStream && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 1000,
+        }}>
+          <div style={{
+            background: '#141920', borderRadius: 12, padding: 24, maxWidth: 400, width: '90%',
+            border: '1px solid rgba(56,189,248,0.2)', boxShadow: '0 20px 40px rgba(0,0,0,0.5)',
+          }}>
+            <h2 style={{ margin: '0 0 12px', fontSize: 18, fontWeight: 600, color: '#38bdf8' }}>
+              Resume Active Stream
+            </h2>
+            <p style={{ margin: '0 0 20px', fontSize: 14, color: 'rgba(255,255,255,0.6)', lineHeight: 1.5 }}>
+              An active stream was found: <strong style={{ color: 'white' }}>{existingActiveStream.title}</strong>
+              <br />
+              Would you like to resume streaming to this session?
+            </p>
+            <div style={{ display: 'flex', gap: 12 }}>
+              <button
+                onClick={() => handleResumeStream()}
+                disabled={isStarting}
+                style={{
+                  flex: 1, padding: '12px 16px', borderRadius: 8, border: 'none',
+                  background: isStarting ? 'rgba(56,189,248,0.5)' : '#38bdf8', color: 'white',
+                  fontWeight: 600, fontSize: 14, cursor: isStarting ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {isStarting ? 'Connecting...' : 'Resume Stream'}
+              </button>
+              <button
+                onClick={() => {
+                  setShowResumePrompt(false);
+                  setExistingActiveStream(null);
+                }}
+                style={{
+                  flex: 1, padding: '12px 16px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)',
+                  background: 'transparent', color: 'rgba(255,255,255,0.7)',
+                  fontWeight: 500, fontSize: 14, cursor: 'pointer',
+                }}
+              >
+                Start New
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
         * { box-sizing: border-box; }
