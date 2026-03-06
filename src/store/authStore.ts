@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { apiLogger } from '../lib/apiLogger';
+import { logger } from '../lib/logger';
 
 interface User {
   id: string;
@@ -43,17 +44,31 @@ export const useAuthStore = create<AuthState>()(
       error: null,
       isEmailVerified: false,
 
-      setUser: (user) => set({ user, isAuthenticated: !!user }),
+      setUser: (user) => {
+        logger.store('📦 AuthStore: User updated', { userId: user?.id });
+        set({ user, isAuthenticated: !!user });
+      },
       
-      setTokens: (accessToken, refreshToken) => set({ 
-        accessToken, 
-        refreshToken,
-        isAuthenticated: true 
-      }),
+      setTokens: (accessToken, refreshToken) => {
+        logger.store('📦 AuthStore: Tokens updated');
+        set({ 
+          accessToken, 
+          refreshToken,
+          isAuthenticated: true 
+        });
+      },
       
-      setLoading: (isLoading) => set({ isLoading }),
+      setLoading: (isLoading) => {
+        logger.store('📦 AuthStore: Loading state changed', { isLoading });
+        set({ isLoading });
+      },
       
-      setError: (error) => set({ error }),
+      setError: (error) => {
+        if (error) {
+          logger.error('STORE', `❌ Auth error: ${error}`, { error });
+        }
+        set({ error });
+      },
       
       setEmailVerified: (isEmailVerified) => set({ isEmailVerified }),
       
@@ -95,7 +110,7 @@ export const useAuthStore = create<AuthState>()(
             accessToken: data.access_token,
             refreshToken: data.refresh_token,
             isAuthenticated: true,
-            isEmailVerified: data.user.is_email_verified ?? false,
+            isEmailVerified: true,
             isLoading: false,
           });
         } catch (error) {

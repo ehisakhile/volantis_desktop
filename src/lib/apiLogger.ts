@@ -17,8 +17,8 @@ class ApiLogger {
   private prefix: string = '[API]';
 
   constructor() {
-    // Enable logging in development mode
-    this.isEnabled = import.meta.env.DEV;
+    // Enable logging always during development
+    this.isEnabled = true; // import.meta.env.DEV;
   }
 
   setLevel(level: LogLevel): void {
@@ -75,7 +75,7 @@ class ApiLogger {
     return '[TOKEN]';
   }
 
-  private formatBody(body: unknown, contentType: string | null): unknown {
+  private formatBody(body: unknown, _contentType: string | null): unknown {
     if (!body) return undefined;
     
     // Don't log binary data
@@ -180,7 +180,7 @@ class ApiLogger {
   /**
    * Log an API response
    */
-  logResponse(url: string, response: Response, duration: number): void {
+  logResponse(_url: string, response: Response, duration: number): void {
     if (!this.shouldLog(LogLevel.DEBUG)) return;
 
     const statusColor = response.ok ? '✅' : '❌';

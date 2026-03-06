@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { logger } from '../lib/logger';
 
 export interface StreamData {
   id: string;
@@ -95,46 +96,80 @@ export const useStreamStore = create<StreamState>((set) => ({
   error: null,
 
   // Actions
-  setCurrentStream: (stream) => set({ currentStream: stream }),
-  setStreamTitle: (title) => set({ streamTitle: title }),
-  setStreamDescription: (description) => set({ streamDescription: description }),
+  setCurrentStream: (stream) => {
+    logger.store(`📦 StreamStore: setCurrentStream`, { streamId: stream?.id });
+    set({ currentStream: stream });
+  },
+  setStreamTitle: (title) => {
+    logger.store(`📦 StreamStore: setStreamTitle`, { title });
+    set({ streamTitle: title });
+  },
+  setStreamDescription: (description) => {
+    set({ streamDescription: description });
+  },
   setThumbnail: (file) => set({ thumbnail: file }),
   setThumbnailPreview: (preview) => set({ thumbnailPreview: preview }),
-  setUseMic: (useMic) => set({ useMic }),
-  setUseSystemAudio: (useSystemAudio) => set({ useSystemAudio }),
+  setUseMic: (useMic) => {
+    logger.store(`📦 StreamStore: setUseMic`, { useMic });
+    set({ useMic });
+  },
+  setUseSystemAudio: (useSystemAudio) => {
+    logger.store(`📦 StreamStore: setUseSystemAudio`, { useSystemAudio });
+    set({ useSystemAudio });
+  },
   setSelectedMicDevice: (deviceId) => set({ selectedMicDevice: deviceId }),
   setMicDevices: (devices) => set({ micDevices: devices }),
   setWantsToRecord: (wants) => set({ wantsToRecord: wants }),
-  setIsRecording: (recording) => set({ isRecording: recording }),
+  setIsRecording: (recording) => {
+    logger.store(`📦 StreamStore: Recording ${recording ? 'started' : 'stopped'}`);
+    set({ isRecording: recording });
+  },
   setRecordingBlob: (blob) => set({ recordingBlob: blob }),
-  setConnectionState: (state) => set({ connectionState: state }),
-  setIsStreaming: (streaming) => set({ isStreaming: streaming }),
+  setConnectionState: (state) => {
+    logger.webrtc(`🔗 WebRTC: Connection state changed to ${state}`);
+    set({ connectionState: state });
+  },
+  setIsStreaming: (streaming) => {
+    logger.webrtc(`📡 WebRTC: Streaming ${streaming ? 'started' : 'stopped'}`);
+    set({ isStreaming: streaming });
+  },
   setIsStarting: (starting) => set({ isStarting: starting }),
   setStreamDuration: (duration) => set({ streamDuration: duration }),
   setCodec: (codec) => set({ codec }),
   setBitrate: (bitrate) => set({ bitrate }),
-  setIceState: (state) => set({ iceState: state }),
-  setError: (error) => set({ error }),
+  setIceState: (state) => {
+    logger.webrtc(`🧊 ICE State: ${state}`);
+    set({ iceState: state });
+  },
+  setError: (error) => {
+    if (error) {
+      logger.error('STORE', `❌ Stream error: ${error}`, { error });
+    }
+    set({ error });
+  },
   
-  resetStream: () => set({
-    currentStream: null,
-    streamTitle: '',
-    streamDescription: '',
-    thumbnail: null,
-    thumbnailPreview: null,
-    useMic: true,
-    useSystemAudio: false,
-    selectedMicDevice: '',
-    wantsToRecord: false,
-    isRecording: false,
-    recordingBlob: null,
-    connectionState: 'idle',
-    isStreaming: false,
-    isStarting: false,
-    streamDuration: 0,
-    codec: '—',
-    bitrate: '—',
-    iceState: '—',
-    error: null,
-  }),
+  resetStream: () => {
+    logger.store('📦 StreamStore: Resetting stream state');
+    set({
+      currentStream: null,
+      streamTitle: '',
+      streamDescription: '',
+      thumbnail: null,
+      thumbnailPreview: null,
+      useMic: true,
+      useSystemAudio: false,
+      selectedMicDevice: '',
+      wantsToRecord: false,
+      isRecording: false,
+      recordingBlob: null,
+      connectionState: 'idle',
+      isStreaming: false,
+      isStarting: false,
+      streamDuration: 0,
+      codec: '—',
+      bitrate: '—',
+      iceState: '—',
+      error: null,
+    });
+  },
 }));
