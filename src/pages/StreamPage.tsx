@@ -3,16 +3,18 @@ import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { useStreamStore } from '../store/streamStore';
 import { useAudioMixer } from '../hooks/useAudioMixer';
+import { useStreamRecorder } from '../hooks/useStreamRecorder';
 import {
   MixerEngine,
   createMixerEngine,
   captureMicSource,
   captureSystemSource,
 } from '../lib/mixer-engine';
+import { CreatorMixer, ChatPanel } from '../components/streaming';
 import {
   Mic, Radio, Square, Loader2,
   Monitor, AlertCircle, Wifi, WifiOff, Image,
-  Upload, LogOut, MicOff, ChevronDown, ChevronUp, Play
+  Upload, LogOut, MicOff, ChevronDown, ChevronUp
 } from 'lucide-react';
 
 const API_URL = 'https://api-dev.volantislive.com';
@@ -201,20 +203,28 @@ export function StreamPage() {
   const {
     streamTitle, streamDescription, thumbnail, thumbnailPreview, useMic, useSystemAudio,
     selectedMicDevice, micDevices, wantsToRecord, connectionState, isStreaming,
-    isStarting, streamDuration, codec, bitrate, iceState, error,
+    isStarting, streamDuration, codec, bitrate, iceState, error, currentStream,
     setStreamTitle, setStreamDescription, setThumbnail, setThumbnailPreview, setUseMic,
     setUseSystemAudio, setSelectedMicDevice, setMicDevices, setWantsToRecord,
     setConnectionState, setIsStreaming, setIsStarting, setStreamDuration,
-    setCodec, setBitrate, setIceState, setError, resetStream,
+    setCodec, setBitrate, setIceState, setError, resetStream, setCurrentStream,
   } = store;
 
   // Audio mixer hook for volume controls
   const audioMixer = useAudioMixer();
 
+  // Stream recorder hook for recording functionality
+  const recorder = useStreamRecorder({
+    onAutoUploadComplete: () => {
+      checkForActiveStream();
+    },
+  });
+
   // Active stream detection
   const [existingActiveStream, setExistingActiveStream] = useState<{id: string; slug: string; title: string; description?: string; cf_webrtc_publish_url?: string; created_at: string} | null>(null);
   const [isCheckingActiveStream, setIsCheckingActiveStream] = useState(false);
   const [showResumePrompt, setShowResumePrompt] = useState(false);
+  const [showStreamEndedModal, setShowStreamEndedModal] = useState(false);
 
   const hasActiveStream = !!existingActiveStream && !isStreaming;
 
@@ -305,19 +315,21 @@ export function StreamPage() {
     
     setIsCheckingActiveStream(true);
     try {
-      const response = await fetch(`${API_URL}/livestreams?status=active&limit=10&offset=0`, {
+      const response = await fetch(`${API_URL}/livestreams?limit=10&offset=0`, {
         headers: { 'Authorization': `Bearer ${accessToken}` },
       });
       
       if (response.ok) {
         const streams = await response.json();
         if (streams && streams.length > 0) {
-          const activeStream = streams[0];
-          console.log('Found existing active stream:', activeStream);
-          setExistingActiveStream(activeStream);
-          setStreamTitle(activeStream.title);
-          setStreamDescription(activeStream.description || '');
-          setShowResumePrompt(true);
+          const activeStream = streams.find((s: { is_active: boolean; end_time: string | null }) => s.is_active === true && !s.end_time);
+          if (activeStream) {
+            console.log('Found existing active stream:', activeStream);
+            setExistingActiveStream(activeStream);
+            setStreamTitle(activeStream.title);
+            setStreamDescription(activeStream.description || '');
+            setShowResumePrompt(true);
+          }
         }
       }
     } catch (err) {
@@ -400,6 +412,11 @@ export function StreamPage() {
 
       durationIntervalRef.current = setInterval(() => setStreamDuration(streamDuration + 1), 1000);
       setIsStreaming(true);
+      setCurrentStream({
+        ...existingActiveStream,
+        status: 'connected',
+        viewer_count: 0,
+      });
       setExistingActiveStream(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to resume stream');
@@ -408,7 +425,7 @@ export function StreamPage() {
     } finally {
       setIsStarting(false);
     }
-  }, [existingActiveStream, useMic, useSystemAudio, selectedMicDevice, streamDuration, startVisualizer, startStats, setIceState, setConnectionState, setCodec, setStreamDuration, setIsStreaming, setError]);
+  }, [existingActiveStream, useMic, useSystemAudio, selectedMicDevice, streamDuration, startVisualizer, startStats, setIceState, setConnectionState, setCodec, setStreamDuration, setIsStreaming, setError, setCurrentStream]);
 
   // Handle start new stream (dismiss resume prompt)
   const handleStartNewStream = useCallback(() => {
@@ -548,6 +565,7 @@ export function StreamPage() {
 
       durationIntervalRef.current = setInterval(() => setStreamDuration(streamDuration + 1), 1000);
       setIsStreaming(true);
+      setCurrentStream(streamData);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start stream');
       setConnectionState('failed');
@@ -555,7 +573,7 @@ export function StreamPage() {
     } finally {
       setIsStarting(false);
     }
-  }, [streamTitle, streamDescription, thumbnail, accessToken, useMic, useSystemAudio, selectedMicDevice, navigate, streamDuration, existingActiveStream, setStreamDuration, setIceState, setError, setConnectionState, setIsStreaming, setIsStarting, setCodec]);
+  }, [streamTitle, streamDescription, thumbnail, accessToken, useMic, useSystemAudio, selectedMicDevice, navigate, streamDuration, existingActiveStream, setStreamDuration, setIceState, setError, setConnectionState, setIsStreaming, setIsStarting, setCodec, setCurrentStream]);
 
   const teardownStream = useCallback(() => {
     pcRef.current?.close(); pcRef.current = null;
@@ -572,12 +590,58 @@ export function StreamPage() {
     }
   }, []);
 
-  const handleStopStream = useCallback(() => {
+  const handleStopStream = useCallback(async () => {
+    // Check if recording was enabled before stopping
+    const didRecord = recorder.state.wantsToRecord === true;
+    
+    // Stop recording if it's running (this will auto-download if enabled)
+    if (recorder.state.isRecording) {
+      recorder.stopRecording();
+    }
+
     teardownStream();
-    setIsStreaming(false); setConnectionState('idle');
-    setStreamDuration(0); setCodec('—'); setBitrate('—'); setIceState('—');
+    
+    // Stop duration counter
+    if (durationIntervalRef.current) {
+      clearInterval(durationIntervalRef.current);
+      durationIntervalRef.current = null;
+    }
+    
+    // Call API to stop stream
+    if (currentStream?.slug) {
+      try {
+        const response = await fetch(`${API_URL}/livestreams/${encodeURIComponent(currentStream.slug)}/stop`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${accessToken}` },
+        });
+        if (!response.ok) {
+          console.error('Failed to stop stream via API:', response.status);
+        }
+      } catch (err) {
+        console.error('Failed to stop stream via API:', err);
+      }
+    }
+    
+    setIsStreaming(false);
+    setStreamDuration(0);
+    setCurrentStream(null);
+    setCodec('—');
+    setConnectionState('idle');
+    setBitrate('—');
+    setIceState('—');
+    
+    // If no recording was used, show success modal
+    // No need to check for active streams or show resume option
+    if (!didRecord) {
+      setShowStreamEndedModal(true);
+    } else {
+      // If recording was used, check for any remaining active streams
+      // The upload success modal will be shown after auto-upload completes
+      checkForActiveStream();
+    }
+     
     resetStream();
-  }, [teardownStream, setIsStreaming, setConnectionState, setStreamDuration, setCodec, setBitrate, setIceState, resetStream]);
+  }, [currentStream, teardownStream, recorder, accessToken, setIsStreaming, setStreamDuration, setCurrentStream, setCodec, setConnectionState, setBitrate, setIceState, resetStream, checkForActiveStream]);
 
   const handleLogout = useCallback(() => {
     if (isStreaming) handleStopStream();
@@ -650,6 +714,54 @@ export function StreamPage() {
                 }}
               >
                 Start New
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Stream Ended Modal */}
+      {showStreamEndedModal && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 1000,
+        }}>
+          <div style={{
+            background: '#141920', borderRadius: 12, padding: 24, maxWidth: 400, width: '90%',
+            border: '1px solid rgba(34,197,94,0.2)', boxShadow: '0 20px 40px rgba(0,0,0,0.5)',
+          }}>
+            <h2 style={{ margin: '0 0 12px', fontSize: 18, fontWeight: 600, color: '#22c55e' }}>
+              Stream Ended
+            </h2>
+            <p style={{ margin: '0 0 20px', fontSize: 14, color: 'rgba(255,255,255,0.6)', lineHeight: 1.5 }}>
+              Your stream has ended successfully. You can view your stream details in the dashboard.
+            </p>
+            <div style={{ display: 'flex', gap: 12 }}>
+              <button
+                onClick={() => {
+                  setShowStreamEndedModal(false);
+                  navigate('/dashboard');
+                }}
+                style={{
+                  flex: 1, padding: '12px 16px', borderRadius: 8, border: 'none',
+                  background: '#22c55e', color: 'white',
+                  fontWeight: 600, fontSize: 14, cursor: 'pointer',
+                }}
+              >
+                Go to Dashboard
+              </button>
+              <button
+                onClick={() => {
+                  setShowStreamEndedModal(false);
+                }}
+                style={{
+                  flex: 1, padding: '12px 16px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)',
+                  background: 'transparent', color: 'rgba(255,255,255,0.7)',
+                  fontWeight: 500, fontSize: 14, cursor: 'pointer',
+                }}
+              >
+                Close
               </button>
             </div>
           </div>
@@ -991,6 +1103,25 @@ export function StreamPage() {
             </div>
           </div>
 
+          {/* Audio Mixer - Show when streaming */}
+          {isStreaming && mixerEngineRef.current && (
+            <div style={{ marginBottom: 10 }}>
+              <CreatorMixer
+                mixerEngine={mixerEngineRef.current}
+                isStreaming={isStreaming}
+                onAddChannel={(type) => {
+                  // Channel is added internally by CreatorMixer with device selection
+                  console.log('Channel added:', type);
+                }}
+                onRemoveChannel={(id) => {
+                  if (mixerEngineRef.current) {
+                    mixerEngineRef.current.removeChannel(id);
+                  }
+                }}
+              />
+            </div>
+          )}
+
           {/* Go Live button */}
           <div style={{ padding: '10px 16px 14px' }}>
             <button
@@ -1075,6 +1206,17 @@ export function StreamPage() {
               <StatRow label="WebRTC" value={connectionState} />
             </div>
           </div>
+
+          {/* Chat Panel - Show when streaming */}
+          {isStreaming && currentStream && (
+            <div>
+              <ChatPanel
+                streamSlug={currentStream.slug}
+                authToken={accessToken || ''}
+                isActive={isStreaming}
+              />
+            </div>
+          )}
         </div>
       </div>
 
