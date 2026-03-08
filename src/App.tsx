@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './store/authStore';
 import { LoginPage } from './pages/LoginPage';
 import { StreamPage } from './pages/StreamPage';
+import { RecordingsPage } from './pages/RecordingsPage';
 import { RouterLogger } from './components/RouterLogger';
 import { useEffect, useState } from 'react';
 
@@ -102,23 +103,33 @@ function App() {
       <AuthChecker>
         <Routes>
           {/* Base route - StreamPage as entry point */}
-          <Route 
-            path="/" 
+          <Route
+            path="/"
             element={
               <BaseRoute>
                 <StreamPage />
               </BaseRoute>
-            } 
+            }
+          />
+          
+          {/* Recordings page */}
+          <Route
+            path="/recordings"
+            element={
+              <BaseRoute>
+                <RecordingsPage />
+              </BaseRoute>
+            }
           />
           
           {/* Login page */}
-          <Route 
-            path="/login" 
+          <Route
+            path="/login"
             element={
               <PublicRoute>
                 <LoginPage />
               </PublicRoute>
-            } 
+            }
           />
           
           {/* Legacy route - redirect to base */}

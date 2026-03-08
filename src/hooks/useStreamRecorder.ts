@@ -1,10 +1,13 @@
 import { useState, useRef, useCallback } from 'react';
+import { saveRecordingFromBlob, listRecordings } from '../lib/tauri-recording';
+import { recordingsApi } from '../lib/api/recordings';
 
 export interface StreamRecorderOptions {
-  onRecordingReady?: (blob: Blob, filename: string) => void;
+  onRecordingReady?: (blob: Blob, filename: string, filePath?: string) => void;
   onUploadComplete?: (recordingUrl: string) => void;
   onUploadError?: (error: Error) => void;
   onAutoUploadComplete?: (recordingUrl: string) => void;
+  onRecordingSaved?: (filePath: string, filename: string) => void;
 }
 
 export interface StreamRecorderState {
@@ -36,7 +39,7 @@ export interface StreamRecorderReturn {
 }
 
 export function useStreamRecorder(options: StreamRecorderOptions = {}): StreamRecorderReturn {
-  const { onRecordingReady, onUploadComplete, onUploadError, onAutoUploadComplete } = options;
+  const { onRecordingReady, onUploadComplete, onUploadError, onAutoUploadComplete, onRecordingSaved } = options;
 
   const [state, setState] = useState<StreamRecorderState>({
     wantsToRecord: null,
@@ -100,6 +103,7 @@ export function useStreamRecorder(options: StreamRecorderOptions = {}): StreamRe
   }, []);
 
   const acceptRecording = useCallback(() => {
+    console.log('[useStreamRecorder] acceptRecording called');
     setState(prev => ({
       ...prev,
       wantsToRecord: true,
@@ -108,6 +112,7 @@ export function useStreamRecorder(options: StreamRecorderOptions = {}): StreamRe
   }, []);
 
   const acceptRecordingWithAutoUpload = useCallback(() => {
+    console.log('[useStreamRecorder] acceptRecordingWithAutoUpload called');
     setState(prev => ({
       ...prev,
       wantsToRecord: true,
@@ -116,6 +121,7 @@ export function useStreamRecorder(options: StreamRecorderOptions = {}): StreamRe
   }, []);
 
   const declineRecording = useCallback(() => {
+    console.log('[useStreamRecorder] declineRecording called');
     setState(prev => ({
       ...prev,
       wantsToRecord: false,
@@ -124,8 +130,15 @@ export function useStreamRecorder(options: StreamRecorderOptions = {}): StreamRe
   }, []);
 
   const startRecording = useCallback((stream: MediaStream, streamSlug: string, streamTitle: string) => {
-    if (state.wantsToRecord !== true) return;
-    if (state.isRecording) return;
+    console.log('[useStreamRecorder] startRecording called, wantsToRecord:', state.wantsToRecord, 'isRecording:', state.isRecording);
+    if (state.wantsToRecord !== true) {
+      console.warn('[useStreamRecorder] startRecording skipped - wantsToRecord is not true');
+      return;
+    }
+    if (state.isRecording) {
+      console.warn('[useStreamRecorder] startRecording skipped - already recording');
+      return;
+    }
 
     try {
       streamSlugRef.current = streamSlug;
@@ -156,7 +169,7 @@ export function useStreamRecorder(options: StreamRecorderOptions = {}): StreamRe
         }
       };
 
-      mediaRecorder.onstop = () => {
+      mediaRecorder.onstop = async () => {
         const blob = new Blob(chunksRef.current, { type: mimeType });
         
         let extension = 'webm';
@@ -173,6 +186,16 @@ export function useStreamRecorder(options: StreamRecorderOptions = {}): StreamRe
         recordedBlobRef.current = blob;
         recordedFilenameRef.current = filename;
 
+        // Save to Documents\Volantislive\myRecordings folder
+        let savedFilePath: string | undefined;
+        try {
+          savedFilePath = await saveRecordingFromBlob(blob, filename);
+          console.log('Recording saved to:', savedFilePath);
+          onRecordingSaved?.(savedFilePath, filename);
+        } catch (err) {
+          console.error('Failed to save recording to file system:', err);
+        }
+
         setState(prev => ({
           ...prev,
           recordedBlob: blob,
@@ -180,7 +203,7 @@ export function useStreamRecorder(options: StreamRecorderOptions = {}): StreamRe
           isRecording: false,
         }));
 
-        onRecordingReady?.(blob, filename);
+        onRecordingReady?.(blob, filename, savedFilePath);
 
         if (!state.autoUpload) {
           downloadBlob(blob, filename);
@@ -214,7 +237,7 @@ export function useStreamRecorder(options: StreamRecorderOptions = {}): StreamRe
         wantsToRecord: false,
       }));
     }
-  }, [state.wantsToRecord, state.isRecording, state.autoUpload, getSupportedMimeType, onRecordingReady]);
+  }, [state.wantsToRecord, state.isRecording, state.autoUpload, getSupportedMimeType, onRecordingReady, onRecordingSaved]);
 
   const stopRecording = useCallback(async () => {
     if (timerRef.current) {
@@ -259,8 +282,22 @@ export function useStreamRecorder(options: StreamRecorderOptions = {}): StreamRe
         try {
           const blobType = blob.type || 'audio/mp4';
           const file = new File([blob], filename, { type: blobType });
-          console.log('Auto-upload ready:', currentStreamSlug, currentStreamTitle, state.recordingDuration);
-          onAutoUploadComplete?.('upload initiated');
+          
+          const response = await recordingsApi.uploadRecording(
+            file,
+            `Recording of: ${currentStreamTitle}`,
+            undefined,
+            state.recordingDuration
+          );
+          
+          setState(prev => ({
+            ...prev,
+            isUploading: false,
+            uploadProgress: 100,
+            isUploaded: true,
+          }));
+          
+          onAutoUploadComplete?.(response.recording_url || response.streaming_url);
         } catch (err) {
           const error = err instanceof Error ? err : new Error('Failed to auto-upload recording');
           setState(prev => ({
@@ -304,13 +341,21 @@ export function useStreamRecorder(options: StreamRecorderOptions = {}): StreamRe
     try {
       const blobType = state.recordedBlob.type || 'audio/mp4';
       const file = new File([state.recordedBlob], state.recordedFilename, { type: blobType });
-      console.log('Upload ready:', state.streamSlug);
+      
+      const response = await recordingsApi.uploadRecording(
+        file,
+        state.recordedFilename,
+        undefined,
+        state.recordingDuration
+      );
+      
       setState(prev => ({
         ...prev,
         isUploading: false,
         uploadProgress: 100,
+        isUploaded: true,
       }));
-      onUploadComplete?.('upload completed');
+      onUploadComplete?.(response.recording_url || response.streaming_url);
     } catch (err) {
       const error = err instanceof Error ? err : new Error('Failed to upload recording');
       setState(prev => ({
@@ -321,7 +366,7 @@ export function useStreamRecorder(options: StreamRecorderOptions = {}): StreamRe
       }));
       onUploadError?.(error);
     }
-  }, [state.recordedBlob, state.recordedFilename, state.streamSlug, onUploadComplete, onUploadError]);
+  }, [state.recordedBlob, state.recordedFilename, state.streamSlug, state.recordingDuration, onUploadComplete, onUploadError]);
 
   const reset = useCallback(() => {
     if (timerRef.current) {

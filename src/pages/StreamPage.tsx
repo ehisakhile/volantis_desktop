@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { useStreamStore } from '../store/streamStore';
 import { useAudioMixer } from '../hooks/useAudioMixer';
-import { useStreamRecorder } from '../hooks/useStreamRecorder';
+import { useStreamRecorder, formatRecordingDuration } from '../hooks/useStreamRecorder';
 import {
   MixerEngine,
   createMixerEngine,
@@ -11,10 +11,12 @@ import {
   captureSystemSource,
 } from '../lib/mixer-engine';
 import { CreatorMixer, ChatPanel } from '../components/streaming';
+import { RecordingPrompt } from '../components/recording/RecordingPrompt';
 import {
   Mic, Radio, Square, Loader2,
   Monitor, AlertCircle, Wifi, WifiOff, Image,
-  Upload, LogOut, MicOff, ChevronDown, ChevronUp
+  Upload, LogOut, MicOff, ChevronDown, ChevronUp,
+  FolderOpen, Disc
 } from 'lucide-react';
 
 const API_URL = 'https://api-dev.volantislive.com';
@@ -202,10 +204,10 @@ export function StreamPage() {
 
   const {
     streamTitle, streamDescription, thumbnail, thumbnailPreview, useMic, useSystemAudio,
-    selectedMicDevice, micDevices, wantsToRecord, connectionState, isStreaming,
+    selectedMicDevice, micDevices, connectionState, isStreaming,
     isStarting, streamDuration, codec, bitrate, iceState, error, currentStream,
     setStreamTitle, setStreamDescription, setThumbnail, setThumbnailPreview, setUseMic,
-    setUseSystemAudio, setSelectedMicDevice, setMicDevices, setWantsToRecord,
+    setUseSystemAudio, setSelectedMicDevice, setMicDevices,
     setConnectionState, setIsStreaming, setIsStarting, setStreamDuration,
     setCodec, setBitrate, setIceState, setError, resetStream, setCurrentStream,
   } = store;
@@ -214,9 +216,15 @@ export function StreamPage() {
   const audioMixer = useAudioMixer();
 
   // Stream recorder hook for recording functionality
+  const [recordingSaved, setRecordingSaved] = useState(false);
   const recorder = useStreamRecorder({
     onAutoUploadComplete: () => {
       checkForActiveStream();
+      setRecordingSaved(true);
+    },
+    onRecordingSaved: (filePath, filename) => {
+      console.log('Recording saved locally:', filePath, filename);
+      setRecordingSaved(true);
     },
   });
 
@@ -226,7 +234,89 @@ export function StreamPage() {
   const [showResumePrompt, setShowResumePrompt] = useState(false);
   const [showStreamEndedModal, setShowStreamEndedModal] = useState(false);
 
+  // Recording state
+  const [showRecordingPrompt, setShowRecordingPrompt] = useState(false);
+  
+  // Debug: log when showRecordingPrompt changes
+  const handleSetShowRecordingPrompt = (value: boolean | ((prev: boolean) => boolean)) => {
+    setShowRecordingPrompt((prev) => {
+      const newValue = typeof value === 'function' ? value(prev) : value;
+      console.log('[RecordingPrompt] setShowRecordingPrompt:', newValue);
+      return newValue;
+    });
+  };
+
   const hasActiveStream = !!existingActiveStream && !isStreaming;
+
+  // Handle recording prompt acceptance
+  const handleAcceptRecording = (autoUpload: boolean) => {
+    console.log('[Recording] handleAcceptRecording called, autoUpload:', autoUpload);
+    if (autoUpload) {
+      console.log('[Recording] Calling acceptRecordingWithAutoUpload');
+      recorder.acceptRecordingWithAutoUpload();
+    } else {
+      console.log('[Recording] Calling acceptRecording');
+      recorder.acceptRecording();
+    }
+    handleSetShowRecordingPrompt(false);
+    // Start recording if stream is already active
+    if (pubStreamRef.current && streamTitle) {
+      console.log('[Recording] Starting recording immediately after accept');
+      const slug = currentStream?.slug || streamTitle;
+      recorder.startRecording(pubStreamRef.current, slug, streamTitle);
+    } else {
+      console.log('[Recording] No pubStreamRef.current or streamTitle, will start when stream begins');
+    }
+  };
+
+  const handleDeclineRecording = () => {
+    console.log('[Recording] handleDeclineRecording called');
+    recorder.declineRecording();
+    handleSetShowRecordingPrompt(false);
+  };
+
+  // Auto-start recording when stream starts (if user enabled recording)
+  useEffect(() => {
+    if (isStreaming && pubStreamRef.current && recorder.state.wantsToRecord === true && !recorder.state.isRecording) {
+      const slug = currentStream?.slug || streamTitle;
+      recorder.startRecording(pubStreamRef.current, slug, streamTitle);
+    }
+  }, [isStreaming, recorder.state.wantsToRecord, recorder.state.isRecording, currentStream?.slug, streamTitle]);
+
+  // Toggle recording on/off
+  const handleToggleRecording = () => {
+    console.log('[Recording] Toggle clicked, current state:', {
+      wantsToRecord: recorder.state.wantsToRecord,
+      isRecording: recorder.state.isRecording,
+      isStreaming,
+      showRecordingPrompt,
+    });
+    
+    if (recorder.state.wantsToRecord === true) {
+      // Recording is enabled, prompt to disable or show current state
+      if (recorder.state.isRecording) {
+        console.log('[Recording] Already recording, do nothing');
+        // Already recording, do nothing (user can stop manually when stream ends)
+      } else {
+        // Start recording now
+        console.log('[Recording] Starting recording now');
+        if (pubStreamRef.current) {
+          const slug = currentStream?.slug || streamTitle;
+          recorder.startRecording(pubStreamRef.current, slug, streamTitle);
+        } else {
+          console.warn('[Recording] No pubStreamRef.current, cannot start recording');
+        }
+      }
+    } else if (recorder.state.wantsToRecord === false) {
+      // User declined, prompt again
+      console.log('[Recording] User previously declined, showing prompt again');
+      handleSetShowRecordingPrompt(true);
+    } else {
+      // First time - show prompt
+      console.log('[Recording] First time, showing prompt');
+      handleSetShowRecordingPrompt(true);
+    }
+  };
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -479,6 +569,10 @@ export function StreamPage() {
       return;
     }
 
+    // Reset recording saved indicator when starting new stream
+    setRecordingSaved(false);
+    recorder.reset();
+
     setIsStarting(true);
     setError(null);
     setConnectionState('connecting');
@@ -573,7 +667,7 @@ export function StreamPage() {
     } finally {
       setIsStarting(false);
     }
-  }, [streamTitle, streamDescription, thumbnail, accessToken, useMic, useSystemAudio, selectedMicDevice, navigate, streamDuration, existingActiveStream, setStreamDuration, setIceState, setError, setConnectionState, setIsStreaming, setIsStarting, setCodec, setCurrentStream]);
+  }, [streamTitle, streamDescription, thumbnail, accessToken, useMic, useSystemAudio, selectedMicDevice, navigate, streamDuration, existingActiveStream, setStreamDuration, setIceState, setError, setConnectionState, setIsStreaming, setIsStarting, setCodec, setCurrentStream, recorder, setRecordingSaved]);
 
   const teardownStream = useCallback(() => {
     pcRef.current?.close(); pcRef.current = null;
@@ -779,6 +873,13 @@ export function StreamPage() {
         @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
       `}</style>
 
+      {/* Recording Prompt Modal */}
+      <RecordingPrompt
+        isOpen={showRecordingPrompt}
+        onAccept={handleAcceptRecording}
+        onDecline={handleDeclineRecording}
+      />
+
       {/* Titlebar */}
       <div
         data-tauri-drag-region
@@ -811,9 +912,39 @@ export function StreamPage() {
               {isOnline ? 'ONLINE' : 'OFFLINE'}
             </span>
           </div>
+          {/* Recording indicator */}
+          {recorder.state.isRecording && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <div style={{
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                background: '#ef4444',
+                animation: 'pulse 1s ease-in-out infinite',
+              }} />
+              <span style={{ fontSize: 10, color: '#ef4444', letterSpacing: '0.05em' }}>
+                REC ({formatRecordingDuration(recorder.state.recordingDuration)})
+              </span>
+              <style>{`
+                @keyframes pulse {
+                  0%, 100% { opacity: 1; }
+                  50% { opacity: 0.5; }
+                }
+              `}</style>
+            </div>
+          )}
           <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.2)', fontFamily: 'monospace' }}>
             {user?.name || user?.email}
           </span>
+          <button
+            onClick={() => navigate('/recordings')}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: 'rgba(255,255,255,0.25)', display: 'flex' }}
+            onMouseEnter={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.6)')}
+            onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.25)')}
+            title="Recordings"
+          >
+            <FolderOpen style={{ width: 12, height: 12 }} />
+          </button>
           <button
             onClick={handleLogout}
             style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: 'rgba(255,255,255,0.25)', display: 'flex' }}
@@ -872,6 +1003,47 @@ export function StreamPage() {
                     transition: 'border-color 0.15s',
                   }}
                 />
+              </div>
+              
+              {/* Recording Toggle */}
+              <div style={{ marginTop: 4 }}>
+                <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', letterSpacing: '0.08em', marginBottom: 6 }}>RECORDING</div>
+                <button
+                  onClick={handleToggleRecording}
+                  disabled={false}
+                  title={isStreaming ? "Click to toggle recording during stream" : "Click to enable recording before going live"}
+                  style={{
+                    width: '100%', padding: '8px 10px',
+                    background: recorder.state.wantsToRecord === true
+                      ? 'rgba(239, 68, 68, 0.15)'
+                      : 'rgba(0,0,0,0.4)',
+                    border: `1px solid ${recorder.state.wantsToRecord === true ? 'rgba(239, 68, 68, 0.4)' : 'rgba(255,255,255,0.08)'}`,
+                    borderRadius: 5,
+                    color: recorder.state.wantsToRecord === true ? '#ef4444' : 'rgba(255,255,255,0.6)',
+                    fontSize: 12,
+                    cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    transition: 'all 0.15s',
+                    opacity: 1,
+                  }}
+                >
+                  <Disc
+                    size={14}
+                    style={{
+                      color: recorder.state.wantsToRecord === true ? '#ef4444' : 'rgba(255,255,255,0.4)',
+                      animation: recorder.state.isRecording ? 'spin 2s linear infinite' : 'none'
+                    }}
+                  />
+                  {recorder.state.wantsToRecord === true
+                    ? (recorder.state.autoUpload ? 'Auto-Upload' : 'Save Locally')
+                    : 'Enable Recording'}
+                </button>
+                <style>{`
+                  @keyframes spin {
+                    from { transform: rotate(0deg); }
+                    to { transform: rotate(360deg); }
+                  }
+                `}</style>
               </div>
             </div>
           </div>
@@ -1027,13 +1199,7 @@ export function StreamPage() {
                   </div>
                 </div>
               )}
-              <ToggleRow
-                icon={<div style={{ width: 14, height: 14, borderRadius: '50%', border: '2px solid currentColor' }} />}
-                label="Record Stream"
-                checked={wantsToRecord}
-                onChange={setWantsToRecord}
-                disabled={isStreaming}
-              />
+              {/* Recording is handled by the main Recording Toggle button above */}
             </div>
           </div>
         </div>
@@ -1234,10 +1400,53 @@ export function StreamPage() {
             {isStreaming ? `ON AIR • ${formatDuration(streamDuration)}` : 'STANDBY'}
           </span>
         </div>
-        <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.12)', fontFamily: 'monospace' }}>
+        
+        {/* Recording indicator in status bar - prominent when recording */}
+        {recorder.state.isRecording && (
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: 6, 
+            padding: '2px 8px',
+            background: 'rgba(239, 68, 68, 0.15)',
+            borderRadius: 3,
+            border: '1px solid rgba(239, 68, 68, 0.3)',
+            marginLeft: 4
+          }}>
+            <div style={{
+              width: 6,
+              height: 6,
+              borderRadius: '50%',
+              background: '#ef4444',
+              animation: 'blink 1s ease-in-out infinite',
+            }} />
+            <span style={{ fontSize: 9, color: '#ef4444', fontFamily: 'monospace', letterSpacing: '0.05em' }}>
+              REC • {formatRecordingDuration(recorder.state.recordingDuration)}
+            </span>
+          </div>
+        )}
+        
+        {/* Recording saved indicator when not recording but has recording */}
+        {!recorder.state.isRecording && (recorder.state.recordedFilename || recordingSaved) && (
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: 4, 
+            padding: '2px 6px',
+            background: 'rgba(34, 197, 94, 0.1)',
+            borderRadius: 3,
+            marginLeft: 4
+          }}>
+            <span style={{ fontSize: 9, color: '#22c55e', fontFamily: 'monospace', letterSpacing: '0.05em' }}>
+              SAVED
+            </span>
+          </div>
+        )}
+        
+        <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.12)', fontFamily: 'monospace', marginLeft: 'auto' }}>
           {isStreaming ? `${bitrate} • ${codec}` : 'WebRTC / Opus'}
         </span>
-        <span style={{ marginLeft: 'auto', fontSize: 10, color: 'rgba(255,255,255,0.12)', fontFamily: 'monospace' }}>
+        <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.12)', fontFamily: 'monospace' }}>
           v1.0.0
         </span>
       </div>

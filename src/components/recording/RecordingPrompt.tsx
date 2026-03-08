@@ -1,4 +1,5 @@
-import { Recording, Upload, X, Cloud, HardDrive } from 'lucide-react';
+import React from 'react';
+import { CircleDot, Upload, X, Cloud, HardDrive } from 'lucide-react';
 
 interface RecordingPromptProps {
   isOpen: boolean;
@@ -10,11 +11,11 @@ const styles: Record<string, React.CSSProperties> = {
   overlay: {
     position: 'fixed',
     inset: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 50,
+    zIndex: 9999,
   },
   modal: {
     backgroundColor: '#0f172a',
@@ -136,15 +137,23 @@ const styles: Record<string, React.CSSProperties> = {
 };
 
 export function RecordingPrompt({ isOpen, onAccept, onDecline }: RecordingPromptProps) {
+  // Log when isOpen changes to true
+  React.useEffect(() => {
+    if (isOpen) {
+      console.log('[RecordingPrompt] ✅ Prompt is now OPEN');
+    }
+  }, [isOpen]);
+  
   if (!isOpen) return null;
-
+  
+  console.log('[RecordingPrompt] ✅ Rendering modal (isOpen=true)');
   return (
     <div style={styles.overlay}>
       <div style={styles.modal}>
         <div style={styles.header}>
           <div style={styles.headerLeft}>
             <div style={styles.iconContainer}>
-              <Recording size={24} color="#ef4444" />
+              <CircleDot size={24} color="#ef4444" />
             </div>
             <div style={styles.headerText}>
               <h2 style={styles.title}>Record Stream?</h2>
