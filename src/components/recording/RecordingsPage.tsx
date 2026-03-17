@@ -5,8 +5,8 @@ import { recordingsApi } from '../../lib/api/recordings';
 interface Recording {
   id: number;
   title: string;
-  description?: string;
-  duration_seconds?: number;
+  description: string | null;
+  duration_seconds: number | null;
   created_at: string;
   recording_url?: string;
 }
@@ -181,7 +181,7 @@ export function RecordingsPage() {
     }
   };
 
-  const formatDuration = (seconds?: number): string => {
+  const formatDuration = (seconds: number | null | undefined): string => {
     if (!seconds) return '--:--';
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;

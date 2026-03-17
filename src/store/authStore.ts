@@ -28,6 +28,8 @@ interface AuthState {
   login: (credentials: { email: string; password: string }) => Promise<void>;
   logout: () => void;
   clearError: () => void;
+  requestPasswordReset: (email: string) => Promise<{ message: string }>;
+  verifyPasswordReset: (email: string, otp: string, newPassword: string) => Promise<{ access_token: string; refresh_token: string; user?: User }>;
 }
 
 // Mock API URL - in production this would be from environment
@@ -139,6 +141,101 @@ export const useAuthStore = create<AuthState>()(
       },
 
       clearError: () => set({ error: null }),
+
+      // Request password reset - sends OTP to user's email
+      requestPasswordReset: async (email: string) => {
+        set({ isLoading: true, error: null });
+        
+        apiLogger.info('📧 Requesting password reset...', { email });
+        
+        try {
+          const response = await fetch(`${API_URL}/auth/password-reset`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ email }),
+          });
+
+          apiLogger.logResponse(`${API_URL}/auth/password-reset`, response, 0);
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            apiLogger.error('❌ Password reset request failed', {
+              status: response.status,
+              data: errorData
+            });
+            throw new Error(errorData.detail || 'Failed to send reset code');
+          }
+
+          const data = await response.json();
+          apiLogger.info('✅ Password reset code sent', { email });
+          
+          set({ isLoading: false });
+          return data;
+        } catch (error) {
+          apiLogger.error('❌ Password reset request error', error);
+          set({
+            error: error instanceof Error ? error.message : 'Failed to send reset code',
+            isLoading: false,
+          });
+          throw error;
+        }
+      },
+
+      // Verify OTP and set new password
+      verifyPasswordReset: async (email: string, otp: string, newPassword: string) => {
+        set({ isLoading: true, error: null });
+        
+        apiLogger.info('🔐 Verifying password reset...', { email });
+        
+        try {
+          const response = await fetch(`${API_URL}/auth/password-reset/verify`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              email,
+              otp,
+              new_password: newPassword,
+            }),
+          });
+
+          apiLogger.logResponse(`${API_URL}/auth/password-reset/verify`, response, 0);
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            apiLogger.error('❌ Password reset verification failed', {
+              status: response.status,
+              data: errorData
+            });
+            throw new Error(errorData.detail || 'Invalid or expired code');
+          }
+
+          const data = await response.json();
+          
+          apiLogger.info('✅ Password reset complete', { email });
+          
+          set({
+            user: data.user,
+            accessToken: data.access_token,
+            refreshToken: data.refresh_token,
+            isAuthenticated: true,
+            isEmailVerified: true,
+            isLoading: false,
+          });
+          
+          return data;
+        } catch (error) {
+          apiLogger.error('❌ Password reset verification error', error);
+          set({
+            error: error instanceof Error ? error.message : 'Invalid or expired code',
+            isLoading: false,
+          });
+          throw error;
+        }
+      },
     }),
     {
       name: 'volantis-auth',

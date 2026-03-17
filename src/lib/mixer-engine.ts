@@ -14,7 +14,7 @@
  * Background ──┘
  */
 
-export type ChannelType = 'mic' | 'system' | 'background';
+export type ChannelType = 'mic' | 'system' | 'background' | 'master';
 
 export interface MixerChannel {
   id: string;

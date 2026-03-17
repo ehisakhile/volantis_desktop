@@ -892,13 +892,22 @@ export function StreamPage() {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{
-            width: 20, height: 20,
-            background: 'linear-gradient(135deg, #38bdf8, #0284c7)',
-            borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <span style={{ color: 'white', fontWeight: 800, fontSize: 12 }}>V</span>
-          </div>
+           <div
+              style={{
+              width: 20,
+              height: 20,
+              margin: '0 auto 12px',
+              background: 'white',
+              borderRadius: 2,
+              marginTop: 3,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: '0 0 0 1px rgba(56,189,248,0.3), 0 8px 24px rgba(14,165,233,0.25)',
+              }}
+            >
+              <img src="/logo.png" alt="Volantis" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+            </div>
           <span style={{ fontSize: 11.5, fontWeight: 600, color: 'rgba(255,255,255,0.5)', letterSpacing: '0.06em' }}>
             VOLANTISLIVE — BROADCAST STUDIO
           </span>

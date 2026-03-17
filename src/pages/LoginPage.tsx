@@ -1,5 +1,5 @@
 import { useState, FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { Mail, Lock, Eye, EyeOff, AlertCircle, LogIn } from 'lucide-react';
 
@@ -83,18 +83,18 @@ export function LoginPage() {
           <div style={{ textAlign: 'center', marginBottom: 32 }}>
             <div
               style={{
-                width: 48,
-                height: 48,
-                margin: '0 auto 12px',
-                background: 'linear-gradient(135deg, #38bdf8 0%, #0ea5e9 50%, #0284c7 100%)',
-                borderRadius: 12,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxShadow: '0 0 0 1px rgba(56,189,248,0.3), 0 8px 24px rgba(14,165,233,0.25)',
+              width: 48,
+              height: 48,
+              margin: '0 auto 12px',
+              background: 'white',
+              borderRadius: 12,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: '0 0 0 1px rgba(56,189,248,0.3), 0 8px 24px rgba(14,165,233,0.25)',
               }}
             >
-              <span style={{ color: 'white', fontWeight: 800, fontSize: 22, letterSpacing: '-0.02em' }}>V</span>
+              <img src="/logo.png" alt="Volantis" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
             </div>
             <h1
               style={{
@@ -201,14 +201,14 @@ export function LoginPage() {
                   >
                     PASSWORD
                   </label>
-                  <a
-                    href="#"
+                  <Link
+                    to="/forgot-password"
                     style={{ fontSize: 11.5, color: 'rgba(56,189,248,0.7)', textDecoration: 'none' }}
                     onMouseEnter={(e) => (e.currentTarget.style.color = '#38bdf8')}
                     onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(56,189,248,0.7)')}
                   >
                     Forgot password?
-                  </a>
+                  </Link>
                 </div>
                 <div style={{ position: 'relative' }}>
                   <Lock
